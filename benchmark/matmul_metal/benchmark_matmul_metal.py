@@ -100,20 +100,44 @@ def _parse_block_config(value):
     return config
 
 
+def _parse_shape(value):
+    parts = value.split(",")
+    if len(parts) != 3:
+        raise argparse.ArgumentTypeError("shape must have the form M,N,K")
+    try:
+        shape = tuple(int(part) for part in parts)
+    except ValueError as err:
+        raise argparse.ArgumentTypeError("shape values must be integers") from err
+    if any(part <= 0 for part in shape):
+        raise argparse.ArgumentTypeError("shape values must be positive")
+    return shape
+
+
 def _selected_configs(args):
     if args.block_config:
         return args.block_config
     return BLOCK_CONFIGS if args.sweep else [(64, 64, 32)]
 
 
-def run_benchmark(args):
-    M, N, K = args.m, args.n, args.k
-    for name, value in (("m", M), ("n", N), ("k", K), ("repeats", args.repeats)):
+def _selected_shapes(args):
+    return getattr(args, "shape", None) or [(args.m, args.n, args.k)]
+
+
+def _validate_positive_inputs(args, shapes):
+    for index, (M, N, K) in enumerate(shapes):
+        prefix = f"--shape[{index}]" if getattr(args, "shape", None) else ""
+        for name, value in (("m", M), ("n", N), ("k", K)):
+            label = f"{prefix}.{name}" if prefix else f"--{name}"
+            if value <= 0:
+                raise SystemExit(f"{label} must be a positive integer, got {value}")
+    for name, value in (("repeats", args.repeats),):
         if value <= 0:
             raise SystemExit(f"--{name} must be a positive integer, got {value}")
     if args.warmup < 0:
         raise SystemExit(f"--warmup must be non-negative, got {args.warmup}")
 
+
+def _run_shape(M, N, K, args, configs):
     print(f"torch:    {torch.__version__}")
     print(f"tilelang: {tilelang.__version__}")
     print(f"MPS:      {torch.backends.mps.is_available()}")
@@ -125,8 +149,6 @@ def run_benchmark(args):
     ref_tflops = bench_torch_mps(M, N, K, args.warmup, args.repeats)
     print(f"PyTorch MPS (torch.mm fp16): {ref_tflops:.1f} TFLOPS")
     print()
-
-    configs = _selected_configs(args)
 
     print(f"{'block (M,N,K)':>16s} | {'TileLang':>14s} | {'Ratio':>6s}")
     print("-" * 44)
@@ -167,6 +189,34 @@ def run_benchmark(args):
         "commit": _git_commit(),
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
+    return result
+
+
+def run_benchmark(args):
+    shapes = _selected_shapes(args)
+    configs = _selected_configs(args)
+    _validate_positive_inputs(args, shapes)
+
+    if len(shapes) == 1:
+        result = _run_shape(*shapes[0], args, configs)
+    else:
+        print(f"Running {len(shapes)} Metal GEMM benchmark shapes")
+        print()
+        result = {
+            "warmup": args.warmup,
+            "repeats": args.repeats,
+            "sweep": args.sweep,
+            "block_configs": [list(config) for config in configs],
+            "runs": [],
+            "commit": _git_commit(),
+            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        }
+        for index, (M, N, K) in enumerate(shapes):
+            if index:
+                print()
+            print(f"=== Shape {index + 1}/{len(shapes)} ===")
+            result["runs"].append(_run_shape(M, N, K, args, configs))
+
     if args.output_json:
         _write_json(args.output_json, result)
         print()
@@ -195,6 +245,12 @@ if __name__ == "__main__":
     parser.add_argument("--m", type=int, default=4096)
     parser.add_argument("--n", type=int, default=4096)
     parser.add_argument("--k", type=int, default=4096)
+    parser.add_argument(
+        "--shape",
+        action="append",
+        type=_parse_shape,
+        help="Benchmark shape as M,N,K. May be passed multiple times; overrides --m/--n/--k.",
+    )
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--repeats", type=int, default=100)
     parser.add_argument("--sweep", action="store_true", help="Sweep all block configs instead of using default (64,64,32)")

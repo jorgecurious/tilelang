@@ -41,6 +41,7 @@ def test_metal_benchmark_writes_json_results(tmp_path, monkeypatch):
         warmup=1,
         repeats=2,
         sweep=True,
+        shape=None,
         block_config=None,
         output_json=str(output_json),
     )
@@ -94,6 +95,7 @@ def test_metal_benchmark_validates_inputs_before_running(monkeypatch):
         warmup=0,
         repeats=0,
         sweep=False,
+        shape=None,
         block_config=None,
         output_json=None,
     )
@@ -117,6 +119,7 @@ def test_metal_benchmark_uses_custom_block_configs(tmp_path, monkeypatch):
         warmup=0,
         repeats=1,
         sweep=True,
+        shape=None,
         block_config=[(64, 64, 16), (128, 64, 32)],
         output_json=str(output_json),
     )
@@ -151,3 +154,51 @@ def test_metal_benchmark_parses_block_config(monkeypatch):
         assert "form M,N,K" in str(err)
     else:
         raise AssertionError("expected malformed block config to raise")
+
+
+def test_metal_benchmark_writes_multi_shape_json(tmp_path, monkeypatch):
+    benchmark = _load_benchmark_module(monkeypatch)
+    output_json = tmp_path / "suite.json"
+    args = argparse.Namespace(
+        m=4096,
+        n=4096,
+        k=4096,
+        shape=[(128, 256, 64), (256, 512, 128)],
+        warmup=1,
+        repeats=2,
+        sweep=False,
+        block_config=[(64, 64, 32)],
+        output_json=str(output_json),
+    )
+
+    monkeypatch.setattr(benchmark.torch.backends.mps, "is_available", lambda: True)
+    monkeypatch.setattr(benchmark, "_git_commit", lambda: "abc123")
+    monkeypatch.setattr(benchmark, "bench_torch_mps", lambda M, _N, _K, _warmup, _repeats: M / 64)
+    monkeypatch.setattr(benchmark, "bench_tilelang", lambda M, _N, _K, *_args: M / 128)
+
+    result = benchmark.run_benchmark(args)
+    written = json.loads(output_json.read_text(encoding="utf-8"))
+
+    assert result["runs"][0]["m"] == 128
+    assert result["runs"][1]["m"] == 256
+    assert written["warmup"] == 1
+    assert written["repeats"] == 2
+    assert written["block_configs"] == [[64, 64, 32]]
+    assert written["commit"] == "abc123"
+    assert len(written["runs"]) == 2
+    assert written["runs"][0]["torch_tflops"] == 2.0
+    assert written["runs"][0]["best_tilelang_tflops"] == 1.0
+    assert written["runs"][1]["torch_tflops"] == 4.0
+    assert written["runs"][1]["best_tilelang_tflops"] == 2.0
+
+
+def test_metal_benchmark_parses_shape(monkeypatch):
+    benchmark = _load_benchmark_module(monkeypatch)
+
+    assert benchmark._parse_shape("128,4096,4096") == (128, 4096, 4096)
+    try:
+        benchmark._parse_shape("128,4096")
+    except argparse.ArgumentTypeError as err:
+        assert "form M,N,K" in str(err)
+    else:
+        raise AssertionError("expected malformed shape to raise")

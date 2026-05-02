@@ -54,27 +54,32 @@ python3 benchmark/matmul_metal/benchmark_matmul_metal.py --m 4096 --n 4096 --k 4
 python3 benchmark/matmul_metal/benchmark_matmul_metal.py --m 4096 --n 4096 --k 4096 --sweep --warmup 10 --repeats 100 --output-json benchmark/matmul_metal/results/metal_gemm_4096.json
 ```
 
-### 3. Decode-weight rectangular shape
+### 3. Multi-shape suite artifact
+```bash
+python3 benchmark/matmul_metal/benchmark_matmul_metal.py --shape 1024,1024,1024 --shape 2048,2048,2048 --shape 128,4096,4096 --shape 128,11008,4096 --block-config 64,64,32 --block-config 128,64,32 --warmup 10 --repeats 100 --output-json benchmark/matmul_metal/results/metal_gemm_suite.json
+```
+
+### 4. Decode-weight rectangular shape
 ```bash
 python3 benchmark/matmul_metal/benchmark_matmul_metal.py --m 128 --n 11008 --k 4096 --warmup 20 --repeats 200 --block-config 64,64,32 --block-config 128,64,32 --output-json benchmark/matmul_metal/results/metal_gemm_rectangular.json
 ```
 
-### 4. Correctness oracle (pytest, runtime-validated on MPS)
+### 5. Correctness oracle (pytest, runtime-validated on MPS)
 ```bash
 python3 -m pytest testing/python/metal/test_metal_gemm_v2.py -q
 ```
 
-### 5. Linux codegen oracle (no Metal runtime required)
+### 6. Linux codegen oracle (no Metal runtime required)
 ```bash
 python3 -m pytest testing/python/metal/test_metal_gemm_v2_linux.py -q
 ```
 
-### 6. Internal scaffolding runtime + source-boundary oracle
+### 7. Internal scaffolding runtime + source-boundary oracle
 ```bash
 python3 -m pytest testing/python/metal/test_metal_internal_scaffolding.py -q
 ```
 
-### 7. Opt-in micro-benchmark hooks (small/scaled/component)
+### 8. Opt-in micro-benchmark hooks (small/scaled/component)
 ```bash
 TILELANG_RUN_METAL_SMALL_BENCH=1 \
   python3 -m pytest testing/python/metal/test_metal_internal_scaffolding.py::test_small_synthetic_runtime_benchmarks_opt_in -q -s
@@ -92,7 +97,8 @@ After each benchmark run, the following should be captured by CI/monitor scripts
 
 1. **Console stdout** - exact TFLOPS numbers and best-config summary.
 2. **JSON artifact**: write with `--output-json benchmark/matmul_metal/results/<name>.json`
-   - Fields: `m, n, k, warmup, repeats, sweep, block_configs, torch_tflops, best_config, best_tilelang_tflops, configs, timestamp, commit`
+   - Single-shape fields: `m, n, k, warmup, repeats, sweep, block_configs, torch_tflops, best_config, best_tilelang_tflops, configs, timestamp, commit`
+   - Multi-shape suite fields: `warmup, repeats, sweep, block_configs, runs, timestamp, commit`, where each `runs` entry uses the single-shape schema.
 3. **Generated Metal source** (for codegen audits):
    ```python
    artifact = tilelang.lower(kernel, target="metal -supports_simdgroup=True")
@@ -117,7 +123,7 @@ A TileLang Metal GEMM config is **promotable** from experimental to recommended 
 | Gap | Impact | Proposed Action |
 |-----|--------|-----------------|
 | No MPSGraph baseline | MPSGraph is explicitly forbidden in source; `torch.mm` is the only viable oracle today | Keep `torch.mm` as oracle; document the MPSGraph restriction |
-| Limited non-square block tuning | Decode-like shapes likely underperform | Use repeated `--block-config` values on rectangular shapes and persist the JSON results |
+| Limited non-square block tuning | Decode-like shapes likely underperform | Use repeated `--shape` and `--block-config` values on rectangular shapes and persist the JSON results |
 | No fp8/fp4 GEMM benchmark | Packed quant probes are scalar-only | Defer until native fp8/fp4 storage is supported; keep uint8 boundary probes as correctness oracle only |
 | No FlashQLA/GDN full benchmark | Only 8x8 and 16x16 component probes exist | Add `benchmark_flashqla_metal.py` with target chunk/key/value dims once kernels are stable |
 
