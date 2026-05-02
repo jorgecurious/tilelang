@@ -54,7 +54,7 @@ _FORBIDDEN_EXTERNAL_TOKENS = (
 
 
 def _lower_source(func) -> str:
-    with tvm.transform.PassContext(), tvm.target.Target("metal"):
+    with tvm.transform.PassContext(), tvm.target.Target("metal -supports_simdgroup=True"):
         artifact = tilelang.lower(func, target="metal -supports_simdgroup=True")
     assert artifact.kernel_source is not None
     return artifact.kernel_source
@@ -878,7 +878,7 @@ def test_flashqla_gdn_kkt_runtime_mps_matches_torch_reference():
 
 @tilelang.testing.requires_metal
 def test_flashqla_gdn_raw_kkt_runtime_mps_matches_torch_reference():
-    kernel = tilelang.compile(_make_flashqla_gdn_raw_kkt_probe(), target="metal")
+    kernel = tilelang.compile(_make_flashqla_gdn_raw_kkt_probe(), target="metal -supports_simdgroup=True")
     row_k = torch.arange(64, dtype=torch.float32).reshape(8, 8) / 17.0
     col_k = (torch.arange(64, dtype=torch.float32).reshape(8, 8).flip(1) - 10.0) / 19.0
     scores = torch.empty((8, 8), dtype=torch.float32, device="mps")
@@ -937,7 +937,7 @@ def test_flashqla_gdn_component_runtime_mps_matches_torch_reference():
 
 @tilelang.testing.requires_metal
 def test_flashqla_gdn_raw_forward_runtime_mps_matches_torch_reference():
-    kernel = tilelang.compile(_make_flashqla_gdn_raw_forward_probe(), target="metal")
+    kernel = tilelang.compile(_make_flashqla_gdn_raw_forward_probe(), target="metal -supports_simdgroup=True")
     k, v, beta, g_cum = _flashqla_gdn_component_synthetic_inputs()
     a_pre = torch.empty((16, 16), dtype=torch.float32, device="mps")
     w = torch.empty((16, 16), dtype=torch.float32, device="mps")

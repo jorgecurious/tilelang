@@ -9,6 +9,7 @@ import time
 import torch
 
 COMPONENTS = ("raw-kkt", "raw-forward")
+METAL_TARGET = "metal -supports_simdgroup=True"
 
 
 def _repo_root():
@@ -82,7 +83,7 @@ def _selected_components(args):
 
 
 def _run_raw_kkt(tilelang, probes, args):
-    kernel = tilelang.compile(probes._make_flashqla_gdn_raw_kkt_probe(), target="metal")
+    kernel = tilelang.compile(probes._make_flashqla_gdn_raw_kkt_probe(), target=METAL_TARGET)
     row_k = torch.arange(64, dtype=torch.float32).reshape(8, 8) / 17.0
     col_k = (torch.arange(64, dtype=torch.float32).reshape(8, 8).flip(1) - 10.0) / 19.0
     row_k_mps, col_k_mps = row_k.to("mps"), col_k.to("mps")
@@ -118,7 +119,7 @@ def _run_raw_kkt(tilelang, probes, args):
 
 
 def _run_raw_forward(tilelang, probes, args):
-    kernel = tilelang.compile(probes._make_flashqla_gdn_raw_forward_probe(), target="metal")
+    kernel = tilelang.compile(probes._make_flashqla_gdn_raw_forward_probe(), target=METAL_TARGET)
     k, v, beta, g_cum = probes._flashqla_gdn_component_synthetic_inputs()
     k_mps, v_mps = k.to("mps"), v.to("mps")
     beta_mps, g_cum_mps = beta.to("mps"), g_cum.to("mps")
