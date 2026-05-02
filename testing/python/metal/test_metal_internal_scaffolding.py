@@ -52,6 +52,23 @@ _FORBIDDEN_EXTERNAL_TOKENS = (
     "tl.cuda",
 )
 
+_NATIVE_SUBBYTE_STORAGE_DTYPES = (
+    "float8_e4m3fn",
+    "float8_e5m2",
+    "float6_e2m3fn",
+    "float6_e3m2fn",
+    "float4_e2m1fn",
+)
+
+_NATIVE_SUBBYTE_SUPPORT_CONTRACT_TERMS = (
+    "type mapping",
+    "storage layout",
+    "packing semantics",
+    "target capability",
+    "source-boundary checks",
+    "runtime correctness",
+)
+
 
 def _lower_source(func) -> str:
     with tvm.transform.PassContext(), tvm.target.Target("metal -supports_simdgroup=True"):
@@ -64,6 +81,12 @@ def _assert_clean_metal_source(src: str) -> None:
     lowered = src.lower()
     for token in _FORBIDDEN_EXTERNAL_TOKENS:
         assert token not in lowered, f"unexpected token {token!r} in generated Metal source:\n{src}"
+
+
+def _assert_no_native_subbyte_storage_tokens(src: str) -> None:
+    lowered = src.lower()
+    for token in ("float8", "float6", "float4"):
+        assert token not in lowered, f"unexpected native sub-byte token {token!r} in generated Metal source:\n{src}"
 
 
 def _make_register_tile_probe():
@@ -841,8 +864,7 @@ def test_deepseek_packed_quant_probe_uses_uint8_boundary_not_native_fp8_fp4_stor
     _assert_clean_metal_source(src)
     lowered = src.lower()
     assert "device uchar" in lowered
-    assert "float8" not in lowered
-    assert "float4" not in lowered
+    _assert_no_native_subbyte_storage_tokens(src)
     assert "simdgroup_multiply_accumulate" not in lowered
     assert metal_quant.use_large_simdgroup_tile(64, 512, mixed_fp4_weight=True)
     assert not metal_quant.use_large_simdgroup_tile(64, 256, mixed_fp4_weight=True)
@@ -875,8 +897,7 @@ def test_scaled_packed_quant_and_gdn_probes_source_boundary_tokens():
     _assert_clean_metal_source(deepseek_src)
     deepseek_lowered = deepseek_src.lower()
     assert deepseek_lowered.count("device uchar") >= 4
-    assert "float8" not in deepseek_lowered
-    assert "float4" not in deepseek_lowered
+    _assert_no_native_subbyte_storage_tokens(deepseek_src)
     assert "simdgroup_multiply_accumulate" not in deepseek_lowered
 
     gdn_src = _lower_source(_make_flashqla_gdn_wu_probe())
@@ -895,8 +916,7 @@ def test_component_packed_quant_and_gdn_probes_source_boundary_tokens():
     _assert_clean_metal_source(deepseek_src)
     deepseek_lowered = deepseek_src.lower()
     assert deepseek_lowered.count("device uchar") >= 4
-    assert "float8" not in deepseek_lowered
-    assert "float4" not in deepseek_lowered
+    _assert_no_native_subbyte_storage_tokens(deepseek_src)
     assert "simdgroup_multiply_accumulate" not in deepseek_lowered
 
     gdn_src = _lower_source(_make_flashqla_gdn_component_probe())
@@ -981,8 +1001,16 @@ def _run_native_dtype_probe(tmp_path: Path, dtype_name: str) -> subprocess.Compl
     )
 
 
-@pytest.mark.parametrize("dtype_name", ["float8_e4m3fn", "float4_e2m1fn"])
-def test_native_fp8_fp4_metal_storage_fail_closed_in_subprocess(tmp_path, dtype_name):
+def test_native_subbyte_storage_support_contract_is_explicit_and_fail_closed():
+    coverage = Path(__file__).with_name("metal_internal_runtime_coverage.md").read_text(encoding="utf-8").lower()
+    for term in _NATIVE_SUBBYTE_SUPPORT_CONTRACT_TERMS:
+        assert term in coverage
+    for dtype_name in ("fp8", "fp6", "fp4"):
+        assert dtype_name in coverage
+
+
+@pytest.mark.parametrize("dtype_name", _NATIVE_SUBBYTE_STORAGE_DTYPES)
+def test_native_subbyte_metal_storage_fail_closed_in_subprocess(tmp_path, dtype_name):
     result = _run_native_dtype_probe(tmp_path, dtype_name)
     combined = result.stdout + result.stderr
     assert result.returncode != 0
