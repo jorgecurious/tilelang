@@ -59,7 +59,7 @@ def assert_simdgroup_store_correctness(M, N, K, block_M, block_N, block_K, dtype
 def assert_simdgroup_store_codegen(M, N, K, block_M, block_N, block_K, dtype=T.float16, accum_dtype=T.float32):
     func = _make_simdgroup_gemm_func(M, N, K, block_M, block_N, block_K, dtype=dtype, accum_dtype=accum_dtype)
     with tvm.transform.PassContext(), tvm.target.Target("metal"):
-        artifact = tilelang.lower(func, target="metal")
+        artifact = tilelang.lower(func, target="metal -supports_simdgroup=True")
 
     src = artifact.kernel_source
     assert src is not None

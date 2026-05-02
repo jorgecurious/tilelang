@@ -5,6 +5,7 @@ from __future__ import annotations
 from tvm import tir, IRModule
 from tvm.ir import Op, PointerType
 from tvm.tir.transform import prim_func_pass
+from tilelang.utils.target import target_has_simdgroup
 
 _GEMM_OPS = None
 
@@ -118,6 +119,13 @@ def _metal_fragment_to_simdgroup(func: tir.PrimFunc, mod: IRModule, ctx) -> tir.
     accum_vars = _collect_fragment_gemm_accum_vars(func.body)
     if not accum_vars:
         return func
+
+    if not target_has_simdgroup(target):
+        raise ValueError(
+            "MetalFragmentToSimdgroup requires simdgroup support. "
+            "Set one of: supports_simdgroup=True, arch=apple7+, or metal_version>=23. "
+            f"Target: {target}"
+        )
 
     var_map: dict = {}
     for var in accum_vars:

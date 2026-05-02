@@ -3,6 +3,7 @@ from __future__ import annotations
 from .gemm_base import GemmBase
 from .inst import GemmInst
 from tilelang.utils.language import is_shared, is_full_region, is_metal_simdgroup, is_fragment
+from tilelang.utils.target import target_has_simdgroup
 from tilelang import tvm as tvm
 from tvm.target import Target
 from tvm.ir import Range
@@ -21,6 +22,12 @@ class GemmMetal(GemmBase):
     def lower(
         self, layout_map: dict, target: Target, thread_bounds: Range, thread_var: tir.Var, mbar_phase_expr: tir.PrimExpr | None = None
     ):
+        if not target_has_simdgroup(target):
+            raise ValueError(
+                "GemmMetal requires a Metal target with simdgroup support. "
+                "Set one of: supports_simdgroup=True, arch=apple7+, or metal_version>=23. "
+                f"Target: {target}"
+            )
         thread_nums = thread_bounds.extent
         for name, value in (("M", self.M), ("N", self.N), ("K", self.chunk)):
             if value % 8 != 0:

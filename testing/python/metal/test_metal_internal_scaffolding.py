@@ -55,7 +55,7 @@ _FORBIDDEN_EXTERNAL_TOKENS = (
 
 def _lower_source(func) -> str:
     with tvm.transform.PassContext(), tvm.target.Target("metal"):
-        artifact = tilelang.lower(func, target="metal")
+        artifact = tilelang.lower(func, target="metal -supports_simdgroup=True")
     assert artifact.kernel_source is not None
     return artifact.kernel_source
 
@@ -667,7 +667,7 @@ def _flashqla_gdn_component_ref(
 
 @tilelang.testing.requires_metal
 def test_deepseek_packed_decode_runtime_mps_matches_cpu_reference():
-    kernel = tilelang.compile(_make_deepseek_packed_quant_probe(), target="metal")
+    kernel = tilelang.compile(_make_deepseek_packed_quant_probe(), target="metal -supports_simdgroup=True")
     q8, q4, e8m0_scale = _deepseek_synthetic_inputs()
     out = torch.empty(16, dtype=torch.float32, device="mps")
 
@@ -680,7 +680,7 @@ def test_deepseek_packed_decode_runtime_mps_matches_cpu_reference():
 
 @tilelang.testing.requires_metal
 def test_deepseek_packed_quant_matmul_runtime_mps_matches_cpu_reference():
-    kernel = tilelang.compile(_make_deepseek_packed_quant_matmul_probe(), target="metal")
+    kernel = tilelang.compile(_make_deepseek_packed_quant_matmul_probe(), target="metal -supports_simdgroup=True")
     q8_act, q4_weight, act_scale, weight_scale = _deepseek_matmul_synthetic_inputs()
     out = torch.empty((8, 8), dtype=torch.float32, device="mps")
 
@@ -693,7 +693,7 @@ def test_deepseek_packed_quant_matmul_runtime_mps_matches_cpu_reference():
 
 @tilelang.testing.requires_metal
 def test_deepseek_component_quant_matmul_runtime_mps_matches_cpu_reference():
-    kernel = tilelang.compile(_make_deepseek_component_quant_matmul_probe(), target="metal")
+    kernel = tilelang.compile(_make_deepseek_component_quant_matmul_probe(), target="metal -supports_simdgroup=True")
     q8_act, q4_weight, act_scale, weight_scale = _deepseek_component_matmul_synthetic_inputs()
     out = torch.empty((16, 32), dtype=torch.float32, device="mps")
 
@@ -706,7 +706,7 @@ def test_deepseek_component_quant_matmul_runtime_mps_matches_cpu_reference():
 
 @tilelang.testing.requires_metal
 def test_flashqla_gdn_kkt_runtime_mps_matches_torch_reference():
-    kernel = tilelang.compile(_make_flashqla_gdn_kkt_probe(), target="metal")
+    kernel = tilelang.compile(_make_flashqla_gdn_kkt_probe(), target="metal -supports_simdgroup=True")
     row_k = torch.arange(64, dtype=torch.float32).reshape(8, 8) / 17.0
     col_k = (torch.arange(64, dtype=torch.float32).reshape(8, 8).flip(1) - 10.0) / 19.0
     scores = torch.empty((8, 8), dtype=torch.float32, device="mps")
@@ -720,7 +720,7 @@ def test_flashqla_gdn_kkt_runtime_mps_matches_torch_reference():
 
 @tilelang.testing.requires_metal
 def test_register_tile_runtime_mps_matches_torch_reference():
-    kernel = tilelang.compile(_make_register_tile_probe(), target="metal")
+    kernel = tilelang.compile(_make_register_tile_probe(), target="metal -supports_simdgroup=True")
     a = torch.arange(64, dtype=torch.float32).reshape(8, 8) / 13.0
     b = (torch.arange(64, dtype=torch.float32).reshape(8, 8) - 20.0) / 11.0
     c = torch.empty((8, 8), dtype=torch.float32, device="mps")
@@ -733,7 +733,7 @@ def test_register_tile_runtime_mps_matches_torch_reference():
 
 @tilelang.testing.requires_metal
 def test_flashqla_gdn_staged_wu_runtime_mps_matches_torch_reference():
-    kernel = tilelang.compile(_make_flashqla_gdn_wu_probe(), target="metal")
+    kernel = tilelang.compile(_make_flashqla_gdn_wu_probe(), target="metal -supports_simdgroup=True")
     a, k, v, beta, g_cum = _flashqla_gdn_wu_synthetic_inputs()
     w = torch.empty((8, 8), dtype=torch.float32, device="mps")
     u = torch.empty((8, 8), dtype=torch.float32, device="mps")
@@ -748,7 +748,7 @@ def test_flashqla_gdn_staged_wu_runtime_mps_matches_torch_reference():
 
 @tilelang.testing.requires_metal
 def test_flashqla_gdn_component_runtime_mps_matches_torch_reference():
-    kernel = tilelang.compile(_make_flashqla_gdn_component_probe(), target="metal")
+    kernel = tilelang.compile(_make_flashqla_gdn_component_probe(), target="metal -supports_simdgroup=True")
     k, v, beta, g_cum = _flashqla_gdn_component_synthetic_inputs()
     a_pre = torch.empty((16, 16), dtype=torch.float32, device="mps")
     w = torch.empty((16, 16), dtype=torch.float32, device="mps")
@@ -768,8 +768,8 @@ def test_small_synthetic_runtime_benchmarks_opt_in():
     if os.environ.get("TILELANG_RUN_METAL_SMALL_BENCH") != "1":
         pytest.skip("set TILELANG_RUN_METAL_SMALL_BENCH=1 to run small Metal benchmark hooks")
 
-    deepseek_kernel = tilelang.compile(_make_deepseek_packed_quant_probe(), target="metal")
-    gdn_kernel = tilelang.compile(_make_flashqla_gdn_kkt_probe(), target="metal")
+    deepseek_kernel = tilelang.compile(_make_deepseek_packed_quant_probe(), target="metal -supports_simdgroup=True")
+    gdn_kernel = tilelang.compile(_make_flashqla_gdn_kkt_probe(), target="metal -supports_simdgroup=True")
     q8, q4, e8m0_scale = _deepseek_synthetic_inputs()
     q8_mps, q4_mps, e8m0_mps = q8.to("mps"), q4.to("mps"), e8m0_scale.to("mps")
     decode_out = torch.empty(16, dtype=torch.float32, device="mps")
@@ -805,8 +805,8 @@ def test_scaled_synthetic_runtime_benchmarks_opt_in():
     if os.environ.get("TILELANG_RUN_METAL_SCALED_BENCH") != "1":
         pytest.skip("set TILELANG_RUN_METAL_SCALED_BENCH=1 to run scaled Metal benchmark hooks")
 
-    deepseek_kernel = tilelang.compile(_make_deepseek_packed_quant_matmul_probe(), target="metal")
-    gdn_kernel = tilelang.compile(_make_flashqla_gdn_wu_probe(), target="metal")
+    deepseek_kernel = tilelang.compile(_make_deepseek_packed_quant_matmul_probe(), target="metal -supports_simdgroup=True")
+    gdn_kernel = tilelang.compile(_make_flashqla_gdn_wu_probe(), target="metal -supports_simdgroup=True")
     q8_act, q4_weight, act_scale, weight_scale = _deepseek_matmul_synthetic_inputs()
     q8_mps = q8_act.to("mps")
     q4_mps = q4_weight.to("mps")
@@ -844,8 +844,8 @@ def test_component_synthetic_runtime_benchmarks_opt_in():
     if os.environ.get("TILELANG_RUN_METAL_COMPONENT_BENCH") != "1":
         pytest.skip("set TILELANG_RUN_METAL_COMPONENT_BENCH=1 to run component Metal benchmark hooks")
 
-    deepseek_kernel = tilelang.compile(_make_deepseek_component_quant_matmul_probe(), target="metal")
-    gdn_kernel = tilelang.compile(_make_flashqla_gdn_component_probe(), target="metal")
+    deepseek_kernel = tilelang.compile(_make_deepseek_component_quant_matmul_probe(), target="metal -supports_simdgroup=True")
+    gdn_kernel = tilelang.compile(_make_flashqla_gdn_component_probe(), target="metal -supports_simdgroup=True")
     q8_act, q4_weight, act_scale, weight_scale = _deepseek_component_matmul_synthetic_inputs()
     q8_mps = q8_act.to("mps")
     q4_mps = q4_weight.to("mps")

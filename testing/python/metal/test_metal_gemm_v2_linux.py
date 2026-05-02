@@ -48,7 +48,7 @@ def assert_metal_gemm_v2_codegen(
 ):
     func = matmul_gemm_v2(M, N, K, block_M, block_N, block_K, dtype=dtype, accum_dtype=accum_dtype)
     with tvm.transform.PassContext(), tvm.target.Target("metal"):
-        artifact = tilelang.lower(func, target="metal")
+        artifact = tilelang.lower(func, target="metal -supports_simdgroup=True")
 
     src_code = artifact.kernel_source
     assert src_code is not None

@@ -15,7 +15,7 @@ from .gemm_wmma import GemmWMMA
 from .gemm_scalar import GemmScalar
 from .gemm_metal import GemmMetal
 from tilelang import _ffi_api
-from tilelang.utils.target import target_is_volta, target_is_metal
+from tilelang.utils.target import target_is_volta, target_is_metal, target_has_simdgroup
 
 
 @tvm_ffi.register_global_func("tl.gemm.infer_layout")
@@ -171,6 +171,12 @@ class Gemm(Node, Scriptable):
             GemmInst: The selected GEMM instruction type
         """
         if target_is_metal(target):
+            if not target_has_simdgroup(target):
+                raise ValueError(
+                    "Metal target does not declare simdgroup support. "
+                    "Set one of: supports_simdgroup=True, arch=apple7+, or metal_version>=23. "
+                    f"Target: {target}"
+                )
             return GemmInst.METAL_SIMDGROUP
         return GemmInst(_ffi_api.GemmGetGemmInst(self, int(thread_nums), target))
 

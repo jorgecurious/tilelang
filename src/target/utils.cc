@@ -177,6 +177,48 @@ bool TargetHasSMVersionGE(Target target, int version) {
   return arch >= version;
 }
 
+int TargetGetMetalVersion(Target target) {
+  if (!TargetIsMetal(target))
+    return 0;
+  if (target->attrs.count("metal_version")) {
+    return static_cast<int>(
+        Downcast<tvm::Integer>(target->attrs.at("metal_version"))->value);
+  }
+  return 0;
+}
+
+bool TargetHasSimdgroup(Target target) {
+  if (!TargetIsMetal(target))
+    return false;
+
+  // 1. Explicit attribute wins
+  if (target->attrs.count("supports_simdgroup")) {
+    return Downcast<tvm::Bool>(target->attrs.at("supports_simdgroup"))->value;
+  }
+
+  // 2. Derive from arch (e.g., "apple7", "apple8", ...)
+  if (target->attrs.count("arch")) {
+    std::string arch = Downcast<tvm::ffi::String>(target->attrs.at("arch"));
+    if (arch.rfind("apple", 0) == 0 && arch.size() > 5) {
+      try {
+        int family = std::stoi(arch.substr(5));
+        return family >= 7;
+      } catch (...) {
+        return false;
+      }
+    }
+  }
+
+  // 3. Derive from metal_version (23 = 2.3, 30 = 3.0, ...)
+  int metal_version = TargetGetMetalVersion(target);
+  if (metal_version >= 23) {
+    return true;
+  }
+
+  // Fail-closed: default to false
+  return false;
+}
+
 int TargetGetWarpSize(Target target) {
   int res = 32;
   if (TargetIsCDNA(target))
@@ -337,7 +379,11 @@ TVM_FFI_STATIC_INIT_BLOCK() {
       .def("tl.TargetGetRDNAGeneration",
            [](Target target) { return TargetGetRDNAGeneration(target); })
       .def("tl.TargetGetWarpSize",
-           [](Target target) { return TargetGetWarpSize(target); });
+           [](Target target) { return TargetGetWarpSize(target); })
+      .def("tl.TargetHasSimdgroup",
+           [](Target target) { return TargetHasSimdgroup(target); })
+      .def("tl.TargetGetMetalVersion",
+           [](Target target) { return TargetGetMetalVersion(target); });
 }
 
 } // namespace tl

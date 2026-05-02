@@ -48,8 +48,8 @@ def assert_metal_codegen(
     accum_dtype=T.float32,
 ):
     func = matmul(M, N, K, block_M, block_N, block_K, dtype=dtype, accum_dtype=accum_dtype)
-    with tvm.transform.PassContext(), tvm.target.Target("metal"):
-        artifact = tilelang.lower(func, target="metal")
+    with tvm.transform.PassContext(), tvm.target.Target("metal -supports_simdgroup=True"):
+        artifact = tilelang.lower(func, target="metal -supports_simdgroup=True")
 
     src_code = artifact.kernel_source
     assert src_code is not None

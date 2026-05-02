@@ -154,7 +154,7 @@ def determine_target(target: str | Target | Literal["auto"] = "auto", return_obj
         elif is_hip_available:
             return_var = "hip"
         elif check_metal_availability():
-            return_var = "metal"
+            return_var = Target({"kind": "metal", "supports_simdgroup": True})
         else:
             raise ValueError("No CUDA or HIP or MPS available on this system.")
 
@@ -256,3 +256,11 @@ def target_has_bulk_copy(target: Target) -> bool:
 
 def target_get_warp_size(target: Target) -> int:
     return _ffi_api.TargetGetWarpSize(target)
+
+
+def target_has_simdgroup(target: Target) -> bool:
+    return _ffi_api.TargetHasSimdgroup(target)
+
+
+def target_get_metal_version(target: Target) -> int:
+    return _ffi_api.TargetGetMetalVersion(target)
