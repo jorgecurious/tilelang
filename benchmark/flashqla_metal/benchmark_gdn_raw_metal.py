@@ -8,7 +8,7 @@ import time
 
 import torch
 
-COMPONENTS = ("raw-kkt", "raw-forward", "raw-forward-outputs")
+COMPONENTS = ("raw-kkt", "raw-forward", "raw-forward-outputs", "raw-forward-outputs-32")
 METAL_TARGET = "metal -supports_simdgroup=True"
 
 
@@ -56,11 +56,12 @@ def _bench(fn, warmup, repeats):
 
 
 def _torch_gdn_component_ref(k, v, beta, g_cum):
+    chunk = k.shape[0]
     scores = k @ k.T
-    row_idx = torch.arange(16, device=k.device).view(16, 1)
-    col_idx = torch.arange(16, device=k.device).view(1, 16)
+    row_idx = torch.arange(chunk, device=k.device).view(chunk, 1)
+    col_idx = torch.arange(chunk, device=k.device).view(1, chunk)
     causal = col_idx < row_idx
-    gated = scores * torch.exp(g_cum.view(16, 1) - g_cum.view(1, 16))
+    gated = scores * torch.exp(g_cum.view(chunk, 1) - g_cum.view(1, chunk))
     a_pre = torch.where(causal, gated, torch.zeros_like(gated))
     k_scaled = k * (beta * torch.exp(g_cum)).unsqueeze(1)
     v_scaled = v * beta.unsqueeze(1)
@@ -196,6 +197,44 @@ def _run_raw_forward_outputs(tilelang, probes, args):
     }
 
 
+def _run_raw_forward_outputs32(tilelang, probes, args):
+    kernel = tilelang.compile(probes._make_flashqla_gdn_raw_forward_outputs32_probe(), target=METAL_TARGET)
+    k, v, beta, g_cum = probes._flashqla_gdn_component32_synthetic_inputs()
+    k_mps, v_mps = k.to("mps"), v.to("mps")
+    beta_mps, g_cum_mps = beta.to("mps"), g_cum.to("mps")
+    w = torch.empty((32, 16), dtype=torch.float32, device="mps")
+    u = torch.empty((32, 16), dtype=torch.float32, device="mps")
+
+    def run_raw_forward_outputs32():
+        kernel(k_mps, v_mps, beta_mps, g_cum_mps, w, u)
+
+    def run_torch_ref():
+        _torch_gdn_component_ref(k_mps, v_mps, beta_mps, g_cum_mps)
+
+    run_raw_forward_outputs32()
+    torch.mps.synchronize()
+    _, ref_w, ref_u = probes._flashqla_gdn_component_ref(k, v, beta, g_cum)
+    assert torch.allclose(w.cpu(), ref_w, atol=1e-4, rtol=1e-5)
+    assert torch.allclose(u.cpu(), ref_u, atol=1e-4, rtol=1e-5)
+
+    raw_ms = _bench(run_raw_forward_outputs32, args.warmup, args.repeats)
+    torch_ref_ms = _bench(run_torch_ref, args.warmup, args.repeats)
+    return {
+        "name": "flashqla_gdn_raw_forward_outputs_32x16",
+        "component": "raw-forward-outputs-32",
+        "chunk": 32,
+        "key_dim": 16,
+        "value_dim": 16,
+        "warmup": args.warmup,
+        "repeats": args.repeats,
+        "raw_ms": raw_ms,
+        "torch_ref_ms": torch_ref_ms,
+        "speedup_vs_torch_ref": torch_ref_ms / raw_ms if raw_ms > 0 else None,
+        "commit": _git_commit(),
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
 def run_benchmark(args):
     _validate(args)
     print(f"MPS: {torch.backends.mps.is_available()}")
@@ -210,6 +249,7 @@ def run_benchmark(args):
         "raw-kkt": _run_raw_kkt,
         "raw-forward": _run_raw_forward,
         "raw-forward-outputs": _run_raw_forward_outputs,
+        "raw-forward-outputs-32": _run_raw_forward_outputs32,
     }
     components = _selected_components(args)
     component_results = []

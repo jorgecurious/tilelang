@@ -50,7 +50,12 @@ def test_gdn_benchmark_selects_all_components():
     benchmark = _load_benchmark_module()
     args = argparse.Namespace(warmup=0, repeats=1, component=["all"], output_json=None)
 
-    assert benchmark._selected_components(args) == ["raw-kkt", "raw-forward", "raw-forward-outputs"]
+    assert benchmark._selected_components(args) == [
+        "raw-kkt",
+        "raw-forward",
+        "raw-forward-outputs",
+        "raw-forward-outputs-32",
+    ]
 
 
 def test_gdn_benchmark_preserves_requested_component_order():
@@ -58,8 +63,13 @@ def test_gdn_benchmark_preserves_requested_component_order():
     args = argparse.Namespace(
         warmup=0,
         repeats=1,
-        component=["raw-forward-outputs", "raw-forward", "raw-kkt"],
+        component=["raw-forward-outputs-32", "raw-forward-outputs", "raw-forward", "raw-kkt"],
         output_json=None,
     )
 
-    assert benchmark._selected_components(args) == ["raw-forward-outputs", "raw-forward", "raw-kkt"]
+    assert benchmark._selected_components(args) == [
+        "raw-forward-outputs-32",
+        "raw-forward-outputs",
+        "raw-forward",
+        "raw-kkt",
+    ]
