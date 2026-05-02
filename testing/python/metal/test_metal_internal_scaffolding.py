@@ -130,6 +130,40 @@ def _make_row_vector_probe():
     return row_vector_probe
 
 
+def _make_register_tile_bad_load_layout_probe():
+    @T.prim_func
+    def register_tile_bad_load_layout_probe(
+        A: T.Tensor((8, 8), T.float32),
+        C: T.Tensor((8, 8), T.float32),
+    ):
+        with T.Kernel(1, threads=32):
+            A_rt = metal_sg.alloc_rt(T.float32, 1, 1)
+            metal_sg.load_global_to_rt(A_rt, T.float32, A.data, 0, 64, 8, transpose=True)
+            metal_sg.store_rt(A_rt, T.float32, C.data, 0, 64, 8)
+
+    return register_tile_bad_load_layout_probe
+
+
+def _make_register_tile_bad_mma_layout_probe():
+    @T.prim_func
+    def register_tile_bad_mma_layout_probe(
+        A: T.Tensor((8, 8), T.float32),
+        B: T.Tensor((8, 8), T.float32),
+        C: T.Tensor((8, 8), T.float32),
+    ):
+        with T.Kernel(1, threads=32):
+            A_rt = metal_sg.alloc_rt(T.float32, 1, 1)
+            Bt_rt = metal_sg.alloc_rt(T.float32, 1, 1, layout=metal_sg.TileLayout.TRANSPOSED)
+            C_rt = metal_sg.alloc_rt(T.float32, 1, 1)
+            metal_sg.fill_rt(C_rt, T.float32(0.0))
+            metal_sg.load_global_to_rt(A_rt, T.float32, A.data, 0, 64, 8)
+            metal_sg.load_global_to_rt(Bt_rt, T.float32, B.data, 0, 64, 8, transpose=True)
+            metal_sg.mma_ab(C_rt, A_rt, Bt_rt)
+            metal_sg.store_rt(C_rt, T.float32, C.data, 0, 64, 8)
+
+    return register_tile_bad_mma_layout_probe
+
+
 def _make_deepseek_packed_quant_probe():
     @T.prim_func
     def deepseek_packed_quant_probe(
@@ -779,6 +813,27 @@ def test_no_public_register_tile_or_row_vector_language_aliases():
     assert not hasattr(T, "rv")
     assert not hasattr(T, "RegisterTile")
     assert not hasattr(T, "RowVector")
+
+
+def test_register_tile_transpose_load_misuse_fails_before_metal_source():
+    with pytest.raises(ValueError, match="load_global_to_rt transposed load requires tile layout transposed"):
+        _lower_source(_make_register_tile_bad_load_layout_probe())
+
+
+def test_register_tile_transposed_operand_rejected_for_plain_mma_before_metal_source():
+    with pytest.raises(ValueError, match="mma_ab requires B layout row_major"):
+        _lower_source(_make_register_tile_bad_mma_layout_probe())
+
+
+def test_register_tile_layout_guardrails_remain_internal_source_boundary():
+    src = _lower_source(_make_row_vector_probe())
+    _assert_clean_metal_source(src)
+    lowered = src.lower()
+    assert "cooperative" not in lowered
+    assert "mpp" not in lowered
+    assert "mpsgraph" not in lowered
+    assert not hasattr(T, "cooperative")
+    assert not hasattr(T, "mpp")
 
 
 def test_deepseek_packed_quant_probe_uses_uint8_boundary_not_native_fp8_fp4_storage():

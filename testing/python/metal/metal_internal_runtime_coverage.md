@@ -12,11 +12,13 @@ This document summarizes internal-only Metal backend coverage for scalar lowerin
 
 - Native Metal fp8/fp4 storage remains intentionally unsupported and fail-closed; component probes keep the packed `uint8` boundary.
 - RegisterTile/RowVector helpers remain internal under `tilelang.tileop`; no public language aliases are added.
+- RegisterTile layout/transpose misuse is covered by negative tests that fail before Metal source generation, preserving helper-internal source boundaries.
 - Component probes assert that forbidden external backend tokens (`cooperative`, `mpp`, `mpsgraph`, `cuda`, etc.) are absent from generated Metal source.
 
 ## Known blockers and deferrals
 
 - This coverage is correctness/scaffolding only; it does not optimize component-scale performance.
+- Any future MPP/cooperative support claim needs an explicit capability gate, layout/permutation proof tests, source-boundary preservation checks, and MPS runtime correctness coverage first.
 - Packed quant matmul uses scalar per-output decode/accumulation rather than native fp8/fp4 tensor storage or a production quantized GEMM lowering.
 - GDN/attention-style coverage remains synthetic and chunk-local; no checkpoint-bound integration or full production recurrent/chunked scheduler is included.
 
