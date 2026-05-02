@@ -10,6 +10,7 @@ import torch
 
 COMPONENTS = ("raw-kkt", "raw-forward", "raw-forward-outputs", "raw-forward-outputs-32")
 METAL_TARGET = "metal -supports_simdgroup=True"
+SCHEMA_VERSION = 1
 
 
 def _repo_root():
@@ -27,6 +28,34 @@ def _git_commit():
         return subprocess.check_output(["git", "-C", str(_repo_root()), "rev-parse", "HEAD"], stderr=subprocess.DEVNULL, text=True).strip()
     except Exception:
         return None
+
+
+def _tilelang_version(tilelang=None):
+    if tilelang is not None:
+        return getattr(tilelang, "__version__", None)
+    try:
+        _ensure_repo_on_path()
+        import tilelang as tilelang_module
+
+        return getattr(tilelang_module, "__version__", None)
+    except Exception:
+        return None
+
+
+def _benchmark_metadata(tilelang=None):
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "target": METAL_TARGET,
+        "torch_version": torch.__version__,
+        "tilelang_version": _tilelang_version(tilelang),
+        "mps_available": torch.backends.mps.is_available(),
+        "commit": _git_commit(),
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+
+
+def _components_requested(args):
+    return list(getattr(args, "component", None) or ["raw-forward"])
 
 
 def _load_probe_module():
@@ -104,6 +133,7 @@ def _run_raw_kkt(tilelang, probes, args):
     raw_ms = _bench(run_raw_kkt, args.warmup, args.repeats)
     torch_ref_ms = _bench(run_torch_ref, args.warmup, args.repeats)
     return {
+        **_benchmark_metadata(tilelang),
         "name": "flashqla_gdn_raw_kkt_8x8",
         "component": "raw-kkt",
         "rows": 8,
@@ -114,8 +144,6 @@ def _run_raw_kkt(tilelang, probes, args):
         "raw_ms": raw_ms,
         "torch_ref_ms": torch_ref_ms,
         "speedup_vs_torch_ref": torch_ref_ms / raw_ms if raw_ms > 0 else None,
-        "commit": _git_commit(),
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 
 
@@ -144,6 +172,7 @@ def _run_raw_forward(tilelang, probes, args):
     raw_ms = _bench(run_raw_forward, args.warmup, args.repeats)
     torch_ref_ms = _bench(run_torch_ref, args.warmup, args.repeats)
     return {
+        **_benchmark_metadata(tilelang),
         "name": "flashqla_gdn_raw_forward_16x16",
         "component": "raw-forward",
         "chunk": 16,
@@ -154,8 +183,6 @@ def _run_raw_forward(tilelang, probes, args):
         "raw_ms": raw_ms,
         "torch_ref_ms": torch_ref_ms,
         "speedup_vs_torch_ref": torch_ref_ms / raw_ms if raw_ms > 0 else None,
-        "commit": _git_commit(),
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 
 
@@ -182,6 +209,7 @@ def _run_raw_forward_outputs(tilelang, probes, args):
     raw_ms = _bench(run_raw_forward_outputs, args.warmup, args.repeats)
     torch_ref_ms = _bench(run_torch_ref, args.warmup, args.repeats)
     return {
+        **_benchmark_metadata(tilelang),
         "name": "flashqla_gdn_raw_forward_outputs_16x16",
         "component": "raw-forward-outputs",
         "chunk": 16,
@@ -192,8 +220,6 @@ def _run_raw_forward_outputs(tilelang, probes, args):
         "raw_ms": raw_ms,
         "torch_ref_ms": torch_ref_ms,
         "speedup_vs_torch_ref": torch_ref_ms / raw_ms if raw_ms > 0 else None,
-        "commit": _git_commit(),
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 
 
@@ -220,6 +246,7 @@ def _run_raw_forward_outputs32(tilelang, probes, args):
     raw_ms = _bench(run_raw_forward_outputs32, args.warmup, args.repeats)
     torch_ref_ms = _bench(run_torch_ref, args.warmup, args.repeats)
     return {
+        **_benchmark_metadata(tilelang),
         "name": "flashqla_gdn_raw_forward_outputs_32x16",
         "component": "raw-forward-outputs-32",
         "chunk": 32,
@@ -230,8 +257,6 @@ def _run_raw_forward_outputs32(tilelang, probes, args):
         "raw_ms": raw_ms,
         "torch_ref_ms": torch_ref_ms,
         "speedup_vs_torch_ref": torch_ref_ms / raw_ms if raw_ms > 0 else None,
-        "commit": _git_commit(),
-        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     }
 
 
@@ -252,6 +277,7 @@ def run_benchmark(args):
         "raw-forward-outputs-32": _run_raw_forward_outputs32,
     }
     components = _selected_components(args)
+    components_requested = _components_requested(args)
     component_results = []
     for component in components:
         print(f"=== {component} ===")
@@ -266,12 +292,12 @@ def run_benchmark(args):
         result = component_results[0]
     else:
         result = {
+            **_benchmark_metadata(tilelang),
             "name": "flashqla_gdn_raw_component_suite",
+            "components_requested": components_requested,
             "components": component_results,
             "warmup": args.warmup,
             "repeats": args.repeats,
-            "commit": _git_commit(),
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         }
     if args.output_json:
         _write_json(args.output_json, result)
