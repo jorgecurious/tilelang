@@ -56,7 +56,7 @@ python3 benchmark/matmul_metal/benchmark_matmul_metal.py --m 4096 --n 4096 --k 4
 
 ### 3. Decode-weight rectangular shape
 ```bash
-python3 benchmark/matmul_metal/benchmark_matmul_metal.py --m 1 --n 11008 --k 4096 --warmup 20 --repeats 200
+python3 benchmark/matmul_metal/benchmark_matmul_metal.py --m 128 --n 11008 --k 4096 --warmup 20 --repeats 200 --block-config 64,64,32 --block-config 128,64,32 --output-json benchmark/matmul_metal/results/metal_gemm_rectangular.json
 ```
 
 ### 4. Correctness oracle (pytest, runtime-validated on MPS)
@@ -92,7 +92,7 @@ After each benchmark run, the following should be captured by CI/monitor scripts
 
 1. **Console stdout** - exact TFLOPS numbers and best-config summary.
 2. **JSON artifact**: write with `--output-json benchmark/matmul_metal/results/<name>.json`
-   - Fields: `m, n, k, warmup, repeats, sweep, torch_tflops, best_config, best_tilelang_tflops, configs, timestamp, commit`
+   - Fields: `m, n, k, warmup, repeats, sweep, block_configs, torch_tflops, best_config, best_tilelang_tflops, configs, timestamp, commit`
 3. **Generated Metal source** (for codegen audits):
    ```python
    artifact = tilelang.lower(kernel, target="metal -supports_simdgroup=True")
@@ -117,7 +117,7 @@ A TileLang Metal GEMM config is **promotable** from experimental to recommended 
 | Gap | Impact | Proposed Action |
 |-----|--------|-----------------|
 | No MPSGraph baseline | MPSGraph is explicitly forbidden in source; `torch.mm` is the only viable oracle today | Keep `torch.mm` as oracle; document the MPSGraph restriction |
-| No non-square block tuning | M=1 decode shapes likely underperform | Extend benchmark to sweep M=1, N in {4096, 11008}, K=4096 and record best block configs |
+| Limited non-square block tuning | Decode-like shapes likely underperform | Use repeated `--block-config` values on rectangular shapes and persist the JSON results |
 | No fp8/fp4 GEMM benchmark | Packed quant probes are scalar-only | Defer until native fp8/fp4 storage is supported; keep uint8 boundary probes as correctness oracle only |
 | No FlashQLA/GDN full benchmark | Only 8x8 and 16x16 component probes exist | Add `benchmark_flashqla_metal.py` with target chunk/key/value dims once kernels are stable |
 

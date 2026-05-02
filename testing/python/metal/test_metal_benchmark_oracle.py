@@ -41,6 +41,7 @@ def test_metal_benchmark_writes_json_results(tmp_path, monkeypatch):
         warmup=1,
         repeats=2,
         sweep=True,
+        block_config=None,
         output_json=str(output_json),
     )
 
@@ -66,6 +67,7 @@ def test_metal_benchmark_writes_json_results(tmp_path, monkeypatch):
     assert written["warmup"] == 1
     assert written["repeats"] == 2
     assert written["sweep"] is True
+    assert written["block_configs"] == [[16, 16, 16], [32, 32, 16]]
     assert written["torch_tflops"] == 4.0
     assert written["best_tilelang_tflops"] == 2.0
     assert written["commit"] == "abc123"
@@ -92,6 +94,7 @@ def test_metal_benchmark_validates_inputs_before_running(monkeypatch):
         warmup=0,
         repeats=0,
         sweep=False,
+        block_config=None,
         output_json=None,
     )
     monkeypatch.setattr(benchmark.torch.backends.mps, "is_available", lambda: True)
@@ -102,3 +105,49 @@ def test_metal_benchmark_validates_inputs_before_running(monkeypatch):
         assert "--repeats must be a positive integer" in str(err)
     else:
         raise AssertionError("expected invalid repeats to raise SystemExit")
+
+
+def test_metal_benchmark_uses_custom_block_configs(tmp_path, monkeypatch):
+    benchmark = _load_benchmark_module(monkeypatch)
+    output_json = tmp_path / "custom.json"
+    args = argparse.Namespace(
+        m=256,
+        n=256,
+        k=128,
+        warmup=0,
+        repeats=1,
+        sweep=True,
+        block_config=[(64, 64, 16), (128, 64, 32)],
+        output_json=str(output_json),
+    )
+
+    monkeypatch.setattr(benchmark.torch.backends.mps, "is_available", lambda: True)
+    monkeypatch.setattr(benchmark, "_git_commit", lambda: "abc123")
+    monkeypatch.setattr(benchmark, "bench_torch_mps", lambda *args: 8.0)
+
+    seen_configs = []
+
+    def bench_tilelang(_M, _N, _K, block_M, block_N, block_K, _warmup, _repeats):
+        seen_configs.append((block_M, block_N, block_K))
+        return 4.0 if block_M == 64 else 5.0
+
+    monkeypatch.setattr(benchmark, "bench_tilelang", bench_tilelang)
+
+    result = benchmark.run_benchmark(args)
+    written = json.loads(output_json.read_text(encoding="utf-8"))
+
+    assert seen_configs == [(64, 64, 16), (128, 64, 32)]
+    assert result["best_config"] == [128, 64, 32]
+    assert written["block_configs"] == [[64, 64, 16], [128, 64, 32]]
+
+
+def test_metal_benchmark_parses_block_config(monkeypatch):
+    benchmark = _load_benchmark_module(monkeypatch)
+
+    assert benchmark._parse_block_config("64,128,32") == (64, 128, 32)
+    try:
+        benchmark._parse_block_config("64,128")
+    except argparse.ArgumentTypeError as err:
+        assert "form M,N,K" in str(err)
+    else:
+        raise AssertionError("expected malformed block config to raise")

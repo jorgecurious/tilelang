@@ -87,6 +87,25 @@ def _write_json(path, result):
     output_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
+def _parse_block_config(value):
+    parts = value.split(",")
+    if len(parts) != 3:
+        raise argparse.ArgumentTypeError("block config must have the form M,N,K")
+    try:
+        config = tuple(int(part) for part in parts)
+    except ValueError as err:
+        raise argparse.ArgumentTypeError("block config values must be integers") from err
+    if any(part <= 0 for part in config):
+        raise argparse.ArgumentTypeError("block config values must be positive")
+    return config
+
+
+def _selected_configs(args):
+    if args.block_config:
+        return args.block_config
+    return BLOCK_CONFIGS if args.sweep else [(64, 64, 32)]
+
+
 def run_benchmark(args):
     M, N, K = args.m, args.n, args.k
     for name, value in (("m", M), ("n", N), ("k", K), ("repeats", args.repeats)):
@@ -107,7 +126,7 @@ def run_benchmark(args):
     print(f"PyTorch MPS (torch.mm fp16): {ref_tflops:.1f} TFLOPS")
     print()
 
-    configs = BLOCK_CONFIGS if args.sweep else [(64, 64, 32)]
+    configs = _selected_configs(args)
 
     print(f"{'block (M,N,K)':>16s} | {'TileLang':>14s} | {'Ratio':>6s}")
     print("-" * 44)
@@ -140,6 +159,7 @@ def run_benchmark(args):
         "warmup": args.warmup,
         "repeats": args.repeats,
         "sweep": args.sweep,
+        "block_configs": [list(config) for config in configs],
         "torch_tflops": ref_tflops,
         "best_config": None if best is None else list(best[0]),
         "best_tilelang_tflops": None if best is None else best[1],
@@ -178,6 +198,12 @@ if __name__ == "__main__":
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--repeats", type=int, default=100)
     parser.add_argument("--sweep", action="store_true", help="Sweep all block configs instead of using default (64,64,32)")
+    parser.add_argument(
+        "--block-config",
+        action="append",
+        type=_parse_block_config,
+        help="Custom block config as M,N,K. May be passed multiple times; overrides --sweep.",
+    )
     parser.add_argument("--output-json", help="Write machine-readable benchmark results to this path")
     args = parser.parse_args()
     run_benchmark(args)
