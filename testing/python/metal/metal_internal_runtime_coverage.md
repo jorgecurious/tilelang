@@ -21,6 +21,7 @@ This document summarizes internal-only Metal backend coverage for scalar lowerin
 - Any future MPP/cooperative support claim needs an explicit capability gate, layout/permutation proof tests, source-boundary preservation checks, and MPS runtime correctness coverage first.
 - Packed quant matmul uses scalar per-output decode/accumulation rather than native fp8/fp4 tensor storage or a production quantized GEMM lowering.
 - GDN/attention-style coverage remains synthetic and chunk-local; no checkpoint-bound integration or full production recurrent/chunked scheduler is included.
+- Naive chunk64 raw GDN full staging remains blocked: materializing score, attention, K, and V fp32 threadgroup tiles for `chunk=64,key_dim=128,value_dim=128` requires 24,576 elements, or 98,304 bytes, above Metal's 32 KiB threadgroup-memory budget. Future chunk64 support needs a tiled or streaming decomposition with source/lowering evidence that every dynamic threadgroup allocation stays under the budget before benchmark execution is enabled.
 
 ## Verification hooks
 

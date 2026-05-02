@@ -52,6 +52,19 @@ _FORBIDDEN_EXTERNAL_TOKENS = (
     "tl.cuda",
 )
 
+_METAL_THREADGROUP_MEMORY_BUDGET_BYTES = 32 * 1024
+_FLOAT32_BYTES = 4
+
+
+def _gdn_full_staging_threadgroup_bytes(chunk: int, key_dim: int, value_dim: int) -> int:
+    elements = chunk * chunk * 2 + chunk * key_dim + chunk * value_dim
+    return elements * _FLOAT32_BYTES
+
+
+def _gdn_output_staging_threadgroup_bytes(chunk: int, key_dim: int, value_dim: int) -> int:
+    elements = chunk * chunk + chunk * key_dim + chunk * value_dim
+    return elements * _FLOAT32_BYTES
+
 
 def _lower_source(func) -> str:
     with tvm.transform.PassContext(), tvm.target.Target("metal -supports_simdgroup=True"):
@@ -946,6 +959,16 @@ def test_flashqla_gdn_raw_forward_outputs32_probe_source_boundary_tokens():
     assert "float gate_state" in src
     assert "gate_state = 1.000000e+00f;" in src
     assert "a_pre" not in src
+
+
+def test_flashqla_gdn_chunk64_full_staging_exceeds_threadgroup_budget():
+    chunk32_bytes = _gdn_output_staging_threadgroup_bytes(chunk=32, key_dim=16, value_dim=16)
+    chunk64_bytes = _gdn_full_staging_threadgroup_bytes(chunk=64, key_dim=128, value_dim=128)
+
+    assert chunk32_bytes == 8192
+    assert chunk32_bytes <= _METAL_THREADGROUP_MEMORY_BUDGET_BYTES
+    assert chunk64_bytes == 98304
+    assert chunk64_bytes > _METAL_THREADGROUP_MEMORY_BUDGET_BYTES
 
 
 def _run_native_dtype_probe(tmp_path: Path, dtype_name: str) -> subprocess.CompletedProcess[str]:
