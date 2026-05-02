@@ -14,6 +14,26 @@ def _load_benchmark_module():
     return module
 
 
+def _fake_component_result(benchmark, component="raw-forward", **overrides):
+    if component == "raw-kkt":
+        dimensions = {"rows": 8, "cols": 8, "key_dim": 8}
+    else:
+        dimensions = {"chunk": 16, "key_dim": 16, "value_dim": 16}
+    result = {
+        **benchmark._benchmark_metadata(SimpleNamespace(__version__="1.2.3")),
+        **dimensions,
+        "name": f"fake_{component}",
+        "component": component,
+        "warmup": 0,
+        "repeats": 1,
+        "raw_ms": 1.0,
+        "torch_ref_ms": 2.0,
+        "speedup_vs_torch_ref": 2.0,
+    }
+    result.update(overrides)
+    return result
+
+
 def test_gdn_benchmark_writes_json(tmp_path):
     benchmark = _load_benchmark_module()
     output_json = tmp_path / "results" / "gdn.json"
@@ -102,6 +122,97 @@ def test_gdn_benchmark_metadata_allows_missing_tilelang_version():
     assert benchmark._tilelang_version(SimpleNamespace()) is None
 
 
+def test_gdn_benchmark_validates_single_component_result_schema(monkeypatch):
+    benchmark = _load_benchmark_module()
+    monkeypatch.setattr(benchmark.torch.backends.mps, "is_available", lambda: False)
+    monkeypatch.setattr(benchmark, "_git_commit", lambda: "abc123")
+
+    result = _fake_component_result(benchmark, component="raw-kkt")
+
+    assert benchmark._validate_benchmark_result_schema(result) is result
+
+
+def test_gdn_benchmark_rejects_missing_component_result_field(monkeypatch):
+    benchmark = _load_benchmark_module()
+    monkeypatch.setattr(benchmark.torch.backends.mps, "is_available", lambda: False)
+    monkeypatch.setattr(benchmark, "_git_commit", lambda: "abc123")
+    result = _fake_component_result(benchmark, component="raw-forward")
+    del result["value_dim"]
+
+    try:
+        benchmark._validate_benchmark_result_schema(result)
+    except ValueError as err:
+        assert "raw-forward result missing required fields: value_dim" in str(err)
+    else:
+        raise AssertionError("expected missing value_dim to raise ValueError")
+
+
+def test_gdn_benchmark_validates_suite_result_schema(monkeypatch):
+    benchmark = _load_benchmark_module()
+    monkeypatch.setattr(benchmark.torch.backends.mps, "is_available", lambda: False)
+    monkeypatch.setattr(benchmark, "_git_commit", lambda: "abc123")
+    components = [
+        _fake_component_result(benchmark, component="raw-forward-outputs-32"),
+        _fake_component_result(benchmark, component="raw-kkt"),
+    ]
+    result = {
+        **benchmark._benchmark_metadata(SimpleNamespace(__version__="1.2.3")),
+        "name": "flashqla_gdn_raw_component_suite",
+        "components_requested": ["raw-forward-outputs-32", "raw-kkt"],
+        "components": components,
+        "warmup": 0,
+        "repeats": 1,
+    }
+
+    assert benchmark._validate_benchmark_result_schema(result) is result
+    assert result["components"] is components
+    assert [component["component"] for component in result["components"]] == ["raw-forward-outputs-32", "raw-kkt"]
+
+
+def test_gdn_benchmark_rejects_suite_component_order_mismatch(monkeypatch):
+    benchmark = _load_benchmark_module()
+    monkeypatch.setattr(benchmark.torch.backends.mps, "is_available", lambda: False)
+    monkeypatch.setattr(benchmark, "_git_commit", lambda: "abc123")
+    result = {
+        **benchmark._benchmark_metadata(SimpleNamespace(__version__="1.2.3")),
+        "name": "flashqla_gdn_raw_component_suite",
+        "components_requested": ["raw-kkt", "raw-forward"],
+        "components": [
+            _fake_component_result(benchmark, component="raw-forward"),
+            _fake_component_result(benchmark, component="raw-kkt"),
+        ],
+        "warmup": 0,
+        "repeats": 1,
+    }
+
+    try:
+        benchmark._validate_benchmark_result_schema(result)
+    except ValueError as err:
+        assert "suite component order does not match components_requested" in str(err)
+    else:
+        raise AssertionError("expected component order mismatch to raise ValueError")
+
+
+def test_gdn_benchmark_rejects_missing_suite_field(monkeypatch):
+    benchmark = _load_benchmark_module()
+    monkeypatch.setattr(benchmark.torch.backends.mps, "is_available", lambda: False)
+    monkeypatch.setattr(benchmark, "_git_commit", lambda: "abc123")
+    result = {
+        **benchmark._benchmark_metadata(SimpleNamespace(__version__="1.2.3")),
+        "name": "flashqla_gdn_raw_component_suite",
+        "components": [_fake_component_result(benchmark, component="raw-forward")],
+        "warmup": 0,
+        "repeats": 1,
+    }
+
+    try:
+        benchmark._validate_benchmark_result_schema(result)
+    except ValueError as err:
+        assert "suite result missing required fields: components_requested" in str(err)
+    else:
+        raise AssertionError("expected missing components_requested to raise ValueError")
+
+
 def test_gdn_benchmark_suite_json_has_requested_components_and_metadata(monkeypatch):
     benchmark = _load_benchmark_module()
     fake_tilelang = SimpleNamespace(__version__="9.9.9")
@@ -119,20 +230,28 @@ def test_gdn_benchmark_suite_json_has_requested_components_and_metadata(monkeypa
     monkeypatch.setattr(benchmark.time, "gmtime", lambda: "fixed-gmtime")
     monkeypatch.setattr(benchmark.time, "strftime", lambda fmt, value: f"{fmt}:{value}")
 
-    def fake_runner(_tilelang, _probes, runner_args):
-        return {
-            **benchmark._benchmark_metadata(_tilelang),
-            "name": f"fake_{runner_args.repeats}",
-            "component": "fake",
-            "warmup": runner_args.warmup,
-            "repeats": runner_args.repeats,
-            "raw_ms": 1.0,
-            "torch_ref_ms": 2.0,
-            "speedup_vs_torch_ref": 2.0,
-        }
+    def fake_raw_kkt_runner(_tilelang, _probes, runner_args):
+        return _fake_component_result(
+            benchmark,
+            component="raw-kkt",
+            warmup=runner_args.warmup,
+            repeats=runner_args.repeats,
+            tilelang_version=_tilelang.__version__,
+            mps_available=True,
+        )
 
-    monkeypatch.setattr(benchmark, "_run_raw_kkt", fake_runner)
-    monkeypatch.setattr(benchmark, "_run_raw_forward", fake_runner)
+    def fake_raw_forward_runner(_tilelang, _probes, runner_args):
+        return _fake_component_result(
+            benchmark,
+            component="raw-forward",
+            warmup=runner_args.warmup,
+            repeats=runner_args.repeats,
+            tilelang_version=_tilelang.__version__,
+            mps_available=True,
+        )
+
+    monkeypatch.setattr(benchmark, "_run_raw_kkt", fake_raw_kkt_runner)
+    monkeypatch.setattr(benchmark, "_run_raw_forward", fake_raw_forward_runner)
 
     result = benchmark.run_benchmark(args)
 
@@ -143,3 +262,4 @@ def test_gdn_benchmark_suite_json_has_requested_components_and_metadata(monkeypa
     assert result["mps_available"] is True
     assert result["components_requested"] == ["raw-kkt", "raw-forward"]
     assert [component["schema_version"] for component in result["components"]] == [1, 1]
+    assert [component["component"] for component in result["components"]] == ["raw-kkt", "raw-forward"]

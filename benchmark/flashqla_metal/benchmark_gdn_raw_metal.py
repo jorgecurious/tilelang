@@ -11,6 +11,27 @@ import torch
 COMPONENTS = ("raw-kkt", "raw-forward", "raw-forward-outputs", "raw-forward-outputs-32")
 METAL_TARGET = "metal -supports_simdgroup=True"
 SCHEMA_VERSION = 1
+_METADATA_FIELDS = (
+    "schema_version",
+    "target",
+    "torch_version",
+    "tilelang_version",
+    "mps_available",
+    "commit",
+    "timestamp",
+)
+_COMPONENT_RESULT_FIELDS = (
+    "name",
+    "component",
+    "warmup",
+    "repeats",
+    "raw_ms",
+    "torch_ref_ms",
+    "speedup_vs_torch_ref",
+)
+_RAW_KKT_DIMENSION_FIELDS = ("rows", "cols", "key_dim")
+_FORWARD_DIMENSION_FIELDS = ("chunk", "key_dim", "value_dim")
+_SUITE_FIELDS = ("components_requested", "components", "warmup", "repeats")
 
 
 def _repo_root():
@@ -71,6 +92,40 @@ def _write_json(path, result):
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _require_fields(result, fields, label):
+    missing = [field for field in fields if field not in result]
+    if missing:
+        raise ValueError(f"{label} missing required fields: {', '.join(missing)}")
+
+
+def _validate_component_result_schema(result):
+    _require_fields(result, (*_METADATA_FIELDS, *_COMPONENT_RESULT_FIELDS), "component result")
+    component = result["component"]
+    if component == "raw-kkt":
+        _require_fields(result, _RAW_KKT_DIMENSION_FIELDS, "raw-kkt result")
+    elif component in ("raw-forward", "raw-forward-outputs", "raw-forward-outputs-32"):
+        _require_fields(result, _FORWARD_DIMENSION_FIELDS, f"{component} result")
+    else:
+        raise ValueError(f"unknown component result: {component}")
+    return result
+
+
+def _validate_benchmark_result_schema(result):
+    if "components" not in result:
+        return _validate_component_result_schema(result)
+
+    _require_fields(result, (*_METADATA_FIELDS, *_SUITE_FIELDS), "suite result")
+    for component_result in result["components"]:
+        _validate_component_result_schema(component_result)
+    if "all" not in result["components_requested"]:
+        component_order = [component_result["component"] for component_result in result["components"]]
+        if component_order != result["components_requested"]:
+            raise ValueError(
+                f"suite component order does not match components_requested: {component_order} != {result['components_requested']}"
+            )
+    return result
 
 
 def _bench(fn, warmup, repeats):
@@ -299,6 +354,7 @@ def run_benchmark(args):
             "warmup": args.warmup,
             "repeats": args.repeats,
         }
+    _validate_benchmark_result_schema(result)
     if args.output_json:
         _write_json(args.output_json, result)
         print(f"Wrote JSON results to {args.output_json}")
