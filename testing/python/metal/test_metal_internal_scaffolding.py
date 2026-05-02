@@ -23,6 +23,7 @@ Coverage notes:
   or ``TILELANG_RUN_METAL_COMPONENT_BENCH=1``.
 """
 
+import importlib.util
 import os
 import subprocess
 import sys
@@ -50,6 +51,23 @@ _FORBIDDEN_EXTERNAL_TOKENS = (
     "tma",
     "tl.ptx",
     "tl.cuda",
+)
+
+_MPP_LOWERING_CONTRACT_TERMS = (
+    "capability gate",
+    "layout/permutation proof",
+    "source-boundary preservation",
+    "runtime correctness",
+    "failure mode",
+)
+
+_PREMATURE_MPP_API_NAMES = (
+    "mpp",
+    "cooperative",
+    "mpp_mma",
+    "cooperative_mma",
+    "cooperative_load",
+    "cooperative_store",
 )
 
 
@@ -834,6 +852,17 @@ def test_register_tile_layout_guardrails_remain_internal_source_boundary():
     assert "mpsgraph" not in lowered
     assert not hasattr(T, "cooperative")
     assert not hasattr(T, "mpp")
+
+
+def test_mpp_lowering_contract_is_explicit_and_fail_closed():
+    coverage = Path(__file__).with_name("metal_internal_runtime_coverage.md").read_text(encoding="utf-8").lower()
+    for term in _MPP_LOWERING_CONTRACT_TERMS:
+        assert term in coverage
+
+    assert importlib.util.find_spec("tilelang.tileop.metal_mpp") is None
+    for name in _PREMATURE_MPP_API_NAMES:
+        assert not hasattr(T, name)
+        assert not hasattr(metal_sg, name)
 
 
 def test_deepseek_packed_quant_probe_uses_uint8_boundary_not_native_fp8_fp4_storage():

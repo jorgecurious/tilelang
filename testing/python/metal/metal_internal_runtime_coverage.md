@@ -18,9 +18,18 @@ This document summarizes internal-only Metal backend coverage for scalar lowerin
 ## Known blockers and deferrals
 
 - This coverage is correctness/scaffolding only; it does not optimize component-scale performance.
-- Any future MPP/cooperative support claim needs an explicit capability gate, layout/permutation proof tests, source-boundary preservation checks, and MPS runtime correctness coverage first.
 - Packed quant matmul uses scalar per-output decode/accumulation rather than native fp8/fp4 tensor storage or a production quantized GEMM lowering.
 - GDN/attention-style coverage remains synthetic and chunk-local; no checkpoint-bound integration or full production recurrent/chunked scheduler is included.
+
+## Future MPP/cooperative lowering contract
+
+MPP/cooperative support remains intentionally unsupported until all of these prerequisites exist together:
+
+- Capability gate: target metadata must explicitly prove the backend supports the required cooperative/simdgroup operation before lowering selects it.
+- Layout/permutation proof: tests must cover the accepted A/B/accumulator/store layouts and reject unsupported permutations before Metal source generation.
+- Source-boundary preservation: generated Metal must continue to use opaque `metal.simdgroup` / `simdgroup_matrix` operations without scalar fragment indexing or CUDA/MPSGraph/cooperative token leakage.
+- Runtime correctness: focused MPS tests must compare at least one synthetic cooperative-tensor lowering against a CPU/Torch reference before any support claim is enabled.
+- Failure mode: unsupported targets, layouts, and public aliases must remain fail-closed until the contract above is satisfied.
 
 ## Verification hooks
 
