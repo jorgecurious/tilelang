@@ -506,8 +506,23 @@ def _run_native_dtype_probe(tmp_path: Path, dtype_name: str) -> subprocess.Compl
     )
 
 
-@pytest.mark.parametrize("dtype_name", ["float8_e4m3fn", "float4_e2m1fn"])
-def test_native_fp8_fp4_metal_storage_fail_closed_in_subprocess(tmp_path, dtype_name):
+UNSUPPORTED_NATIVE_METAL_STORAGE_DTYPES = (
+    "float8_e3m4",
+    "float8_e4m3",
+    "float8_e4m3b11fnuz",
+    "float8_e4m3fn",
+    "float8_e4m3fnuz",
+    "float8_e5m2",
+    "float8_e5m2fnuz",
+    "float8_e8m0fnu",
+    "float6_e2m3fn",
+    "float6_e3m2fn",
+    "float4_e2m1fn",
+)
+
+
+@pytest.mark.parametrize("dtype_name", UNSUPPORTED_NATIVE_METAL_STORAGE_DTYPES)
+def test_native_subbyte_metal_storage_fail_closed_in_subprocess(tmp_path, dtype_name):
     result = _run_native_dtype_probe(tmp_path, dtype_name)
     combined = result.stdout + result.stderr
     assert result.returncode != 0
