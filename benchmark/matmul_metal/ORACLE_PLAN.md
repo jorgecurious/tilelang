@@ -51,7 +51,7 @@ python3 benchmark/matmul_metal/benchmark_matmul_metal.py --m 4096 --n 4096 --k 4
 
 ### 2. Sweep all block configs on a given shape
 ```bash
-python3 benchmark/matmul_metal/benchmark_matmul_metal.py --m 4096 --n 4096 --k 4096 --sweep --warmup 10 --repeats 100
+python3 benchmark/matmul_metal/benchmark_matmul_metal.py --m 4096 --n 4096 --k 4096 --sweep --warmup 10 --repeats 100 --output-json benchmark/matmul_metal/results/metal_gemm_4096.json
 ```
 
 ### 3. Decode-weight rectangular shape
@@ -91,8 +91,8 @@ TILELANG_RUN_METAL_COMPONENT_BENCH=1 \
 After each benchmark run, the following should be captured by CI/monitor scripts:
 
 1. **Console stdout** - exact TFLOPS numbers and best-config summary.
-2. **JSON artifact** (future): `benchmark/matmul_metal/results/<timestamp>_m<N>_n<N>_k<N>.json`
-   - Fields: `m, n, k, block_config, torch_tflops, tilelang_tflops, ratio_pct, timestamp, commit`
+2. **JSON artifact**: write with `--output-json benchmark/matmul_metal/results/<name>.json`
+   - Fields: `m, n, k, warmup, repeats, sweep, torch_tflops, best_config, best_tilelang_tflops, configs, timestamp, commit`
 3. **Generated Metal source** (for codegen audits):
    ```python
    artifact = tilelang.lower(kernel, target="metal -supports_simdgroup=True")
@@ -116,7 +116,6 @@ A TileLang Metal GEMM config is **promotable** from experimental to recommended 
 
 | Gap | Impact | Proposed Action |
 |-----|--------|-----------------|
-| No JSON result persistence | Cannot track regressions over time | Add `--output-json` to `benchmark_matmul_metal.py` |
 | No MPSGraph baseline | MPSGraph is explicitly forbidden in source; `torch.mm` is the only viable oracle today | Keep `torch.mm` as oracle; document the MPSGraph restriction |
 | No non-square block tuning | M=1 decode shapes likely underperform | Extend benchmark to sweep M=1, N in {4096, 11008}, K=4096 and record best block configs |
 | No fp8/fp4 GEMM benchmark | Packed quant probes are scalar-only | Defer until native fp8/fp4 storage is supported; keep uint8 boundary probes as correctness oracle only |
@@ -128,5 +127,5 @@ Rerunnable end-to-end verification:
 ```bash
 cd /Users/work/Documents/tilelang_exp/tilelang_metal_gemm_upstream_rebase
 python3 -m pytest testing/python/metal/test_metal_gemm_v2.py testing/python/metal/test_metal_gemm_v2_linux.py -q
-python3 benchmark/matmul_metal/benchmark_matmul_metal.py --m 4096 --n 4096 --k 4096 --sweep --warmup 10 --repeats 100
+python3 benchmark/matmul_metal/benchmark_matmul_metal.py --m 4096 --n 4096 --k 4096 --sweep --warmup 10 --repeats 100 --output-json benchmark/matmul_metal/results/metal_gemm_4096.json
 ```

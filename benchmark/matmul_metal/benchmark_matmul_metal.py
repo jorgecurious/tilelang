@@ -1,5 +1,8 @@
 import argparse
+import json
 import logging
+from pathlib import Path
+import subprocess
 import time
 
 import torch
@@ -55,32 +58,36 @@ def _bench(fn, warmup, repeats):
     return (time.perf_counter() - t0) / repeats
 
 
-def bench_torch_mps(M, N, K, warmup, repeats):
-    a = torch.randn(M, K, dtype=torch.float16, device="mps")
-    b = torch.randn(K, N, dtype=torch.float16, device="mps")
-    avg_s = _bench(lambda: torch.mm(a, b), warmup, repeats)
-    return _tflops(M, N, K, avg_s)
+def _git_commit():
+    try:
+        repo_root = Path(__file__).resolve().parents[2]
+        return subprocess.check_output(["git", "-C", str(repo_root), "rev-parse", "HEAD"], stderr=subprocess.DEVNULL, text=True).strip()
+    except Exception:
+        return None
 
 
-def bench_tilelang(M, N, K, block_M, block_N, block_K, warmup, repeats):
-    kernel = matmul_simdgroup(M, N, K, block_M, block_N, block_K)
-    a = torch.randn(M, K, dtype=torch.float16, device="mps")
-    b = torch.randn(K, N, dtype=torch.float16, device="mps")
-    c = torch.zeros(M, N, dtype=torch.float32, device="mps")
-    avg_s = _bench(lambda: kernel(a, b, c), warmup, repeats)
-    return _tflops(M, N, K, avg_s)
+def _config_result(block_config, tilelang_tflops, ref_tflops, error=None):
+    block_M, block_N, block_K = block_config
+    result = {
+        "block_m": block_M,
+        "block_n": block_N,
+        "block_k": block_K,
+        "tilelang_tflops": tilelang_tflops,
+        "ratio_pct": None if tilelang_tflops is None else tilelang_tflops / ref_tflops * 100,
+        "status": "failed" if error else "ok",
+    }
+    if error:
+        result["error"] = str(error)
+    return result
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Metal GEMM Benchmark (simdgroup)")
-    parser.add_argument("--m", type=int, default=4096)
-    parser.add_argument("--n", type=int, default=4096)
-    parser.add_argument("--k", type=int, default=4096)
-    parser.add_argument("--warmup", type=int, default=10)
-    parser.add_argument("--repeats", type=int, default=100)
-    parser.add_argument("--sweep", action="store_true", help="Sweep all block configs instead of using default (64,64,32)")
-    args = parser.parse_args()
+def _write_json(path, result):
+    output_path = Path(path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
+
+def run_benchmark(args):
     M, N, K = args.m, args.n, args.k
     for name, value in (("m", M), ("n", N), ("k", K), ("repeats", args.repeats)):
         if value <= 0:
@@ -105,22 +112,72 @@ if __name__ == "__main__":
     print(f"{'block (M,N,K)':>16s} | {'TileLang':>14s} | {'Ratio':>6s}")
     print("-" * 44)
 
-    best_tflops = 0.0
-    best_config = configs[0]
-    for bM, bN, bK in configs:
+    results = []
+    best = None
+    for config in configs:
+        bM, bN, bK = config
         try:
             tl = bench_tilelang(M, N, K, bM, bN, bK, args.warmup, args.repeats)
             ratio = tl / ref_tflops * 100
-            tag = ""
-            if tl > best_tflops:
-                best_tflops = tl
-                best_config = (bM, bN, bK)
+            if best is None or tl > best[1]:
+                best = (config, tl)
+            results.append(_config_result(config, tl, ref_tflops))
             print(f"{f'({bM},{bN},{bK})':>16s} | {tl:>10.1f} TFLOPS | {ratio:>5.0f}%")
         except Exception as e:
+            results.append(_config_result(config, None, ref_tflops, error=e))
             print(f"{f'({bM},{bN},{bK})':>16s} | {'FAILED':>14s} | {e}")
 
     if args.sweep:
         print()
-        print(f"Best config: {best_config}")
-        print(f"Best TFlops: {best_tflops:.1f}")
+        print(f"Best config: {None if best is None else best[0]}")
+        print(f"Best TFlops: {0.0 if best is None else best[1]:.1f}")
         print(f"Reference TFlops (PyTorch MPS): {ref_tflops:.1f}")
+
+    result = {
+        "m": M,
+        "n": N,
+        "k": K,
+        "warmup": args.warmup,
+        "repeats": args.repeats,
+        "sweep": args.sweep,
+        "torch_tflops": ref_tflops,
+        "best_config": None if best is None else list(best[0]),
+        "best_tilelang_tflops": None if best is None else best[1],
+        "configs": results,
+        "commit": _git_commit(),
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    if args.output_json:
+        _write_json(args.output_json, result)
+        print()
+        print(f"Wrote JSON results to {args.output_json}")
+    return result
+
+
+def bench_torch_mps(M, N, K, warmup, repeats):
+    a = torch.randn(M, K, dtype=torch.float16, device="mps")
+    b = torch.randn(K, N, dtype=torch.float16, device="mps")
+    avg_s = _bench(lambda: torch.mm(a, b), warmup, repeats)
+    return _tflops(M, N, K, avg_s)
+
+
+def bench_tilelang(M, N, K, block_M, block_N, block_K, warmup, repeats):
+    kernel = matmul_simdgroup(M, N, K, block_M, block_N, block_K)
+    a = torch.randn(M, K, dtype=torch.float16, device="mps")
+    b = torch.randn(K, N, dtype=torch.float16, device="mps")
+    c = torch.zeros(M, N, dtype=torch.float32, device="mps")
+    avg_s = _bench(lambda: kernel(a, b, c), warmup, repeats)
+    return _tflops(M, N, K, avg_s)
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Metal GEMM Benchmark (simdgroup)")
+    parser.add_argument("--m", type=int, default=4096)
+    parser.add_argument("--n", type=int, default=4096)
+    parser.add_argument("--k", type=int, default=4096)
+    parser.add_argument("--warmup", type=int, default=10)
+    parser.add_argument("--repeats", type=int, default=100)
+    parser.add_argument("--sweep", action="store_true", help="Sweep all block configs instead of using default (64,64,32)")
+    parser.add_argument("--output-json", help="Write machine-readable benchmark results to this path")
+    args = parser.parse_args()
+    run_benchmark(args)
