@@ -37,3 +37,24 @@ def test_gdn_benchmark_validates_repeats():
         assert "--repeats must be a positive integer" in str(err)
     else:
         raise AssertionError("expected invalid repeats to raise SystemExit")
+
+
+def test_gdn_benchmark_selects_default_component():
+    benchmark = _load_benchmark_module()
+    args = argparse.Namespace(warmup=0, repeats=1, component=None, output_json=None)
+
+    assert benchmark._selected_components(args) == ["raw-forward"]
+
+
+def test_gdn_benchmark_selects_all_components():
+    benchmark = _load_benchmark_module()
+    args = argparse.Namespace(warmup=0, repeats=1, component=["all"], output_json=None)
+
+    assert benchmark._selected_components(args) == ["raw-kkt", "raw-forward"]
+
+
+def test_gdn_benchmark_preserves_requested_component_order():
+    benchmark = _load_benchmark_module()
+    args = argparse.Namespace(warmup=0, repeats=1, component=["raw-forward", "raw-kkt"], output_json=None)
+
+    assert benchmark._selected_components(args) == ["raw-forward", "raw-kkt"]
