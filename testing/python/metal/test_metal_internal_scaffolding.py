@@ -515,6 +515,119 @@ def _make_flashqla_gdn_raw_forward_probe():
     return flashqla_gdn_raw_forward_probe
 
 
+def _make_flashqla_gdn_raw_forward_outputs_probe():
+    @T.prim_func
+    def flashqla_gdn_raw_forward_outputs_probe(
+        k: T.Tensor((16, 16), T.float32),
+        v: T.Tensor((16, 16), T.float32),
+        beta: T.Tensor((16,), T.float32),
+        g_cum: T.Tensor((16,), T.float32),
+        w: T.Tensor((16, 16), T.float32),
+        u: T.Tensor((16, 16), T.float32),
+    ):
+        with T.Kernel(1, threads=32):
+            lane = T.get_thread_binding()
+            gate_state = T.alloc_var(T.float32)
+            gate_state = 1.0
+            score_shared = T.alloc_shared((8, 8), T.float32)
+            a_shared = T.alloc_shared((16, 16), T.float32)
+            k_scaled_shared = T.alloc_shared((16, 16), T.float32)
+            v_scaled_shared = T.alloc_shared((16, 16), T.float32)
+            row_rt = T.alloc_fragment((1, 8, 8), T.float32, scope="metal.simdgroup")
+            col_rt = T.alloc_fragment((1, 8, 8), T.float32, scope="metal.simdgroup")
+            score_rt = T.alloc_fragment((1, 8, 8), T.float32, scope="metal.simdgroup")
+            a_rt = T.alloc_fragment((1, 8, 8), T.float32, scope="metal.simdgroup")
+            k_rt = T.alloc_fragment((1, 8, 8), T.float32, scope="metal.simdgroup")
+            v_rt = T.alloc_fragment((1, 8, 8), T.float32, scope="metal.simdgroup")
+            w_acc = T.alloc_fragment((1, 8, 8), T.float32, scope="metal.simdgroup")
+            u_acc = T.alloc_fragment((1, 8, 8), T.float32, scope="metal.simdgroup")
+
+            for idx in T.serial(lane, 16 * 16, step=32):
+                r = idx // 16
+                c = idx - r * 16
+                k_scaled_shared[r, c] = k[r, c] * beta[r] * T.exp(g_cum[r]) * gate_state
+                v_scaled_shared[r, c] = v[r, c] * beta[r] * gate_state
+                a_shared[r, c] = 0.0
+            T.sync_threads()
+
+            for row_block in T.unroll(2, explicit=True):
+                for col_block in T.unroll(2, explicit=True):
+                    metal_sg.fill(score_rt, 0, T.float32(0.0))
+                    for key_block in T.unroll(2, explicit=True):
+                        metal_sg.load(
+                            row_rt,
+                            0,
+                            T.float32,
+                            k.data,
+                            row_block * 8 * 16 + key_block * 8,
+                            16 * 16,
+                            16,
+                        )
+                        metal_sg.load(
+                            col_rt,
+                            0,
+                            T.float32,
+                            k.data,
+                            col_block * 8 * 16 + key_block * 8,
+                            16 * 16,
+                            16,
+                            transpose=True,
+                        )
+                        metal_sg.mma(score_rt, row_rt, col_rt)
+                    metal_sg.store(score_rt, 0, T.float32, score_shared.data, 0, 8 * 8, 8)
+                    T.sync_threads()
+                    for idx in T.serial(lane, 8 * 8, step=32):
+                        local_row = idx // 8
+                        local_col = idx - local_row * 8
+                        c = row_block * 8 + local_row
+                        d = col_block * 8 + local_col
+                        gated = T.alloc_var(T.float32)
+                        gated = 0.0
+                        if d < c:
+                            gated = score_shared[local_row, local_col] * T.exp(g_cum[c] - g_cum[d]) * gate_state
+                        a_shared[c, d] = gated
+                    T.sync_threads()
+
+            for row_block in T.unroll(2, explicit=True):
+                for col_block in T.unroll(2, explicit=True):
+                    metal_sg.fill(w_acc, 0, T.float32(0.0))
+                    metal_sg.fill(u_acc, 0, T.float32(0.0))
+                    for d_block in T.unroll(2, explicit=True):
+                        metal_sg.load(
+                            a_rt,
+                            0,
+                            T.float32,
+                            a_shared.data,
+                            row_block * 8 * 16 + d_block * 8,
+                            16 * 16,
+                            16,
+                        )
+                        metal_sg.load(
+                            k_rt,
+                            0,
+                            T.float32,
+                            k_scaled_shared.data,
+                            d_block * 8 * 16 + col_block * 8,
+                            16 * 16,
+                            16,
+                        )
+                        metal_sg.load(
+                            v_rt,
+                            0,
+                            T.float32,
+                            v_scaled_shared.data,
+                            d_block * 8 * 16 + col_block * 8,
+                            16 * 16,
+                            16,
+                        )
+                        metal_sg.mma(w_acc, a_rt, k_rt)
+                        metal_sg.mma(u_acc, a_rt, v_rt)
+                    metal_sg.store(w_acc, 0, T.float32, w.data, row_block * 8 * 16 + col_block * 8, 16 * 16, 16)
+                    metal_sg.store(u_acc, 0, T.float32, u.data, row_block * 8 * 16 + col_block * 8, 16 * 16, 16)
+
+    return flashqla_gdn_raw_forward_outputs_probe
+
+
 def test_internal_register_tile_helper_emits_pr_simdgroup_tokens_only():
     src = _lower_source(_make_register_tile_probe())
     _assert_clean_metal_source(src)
@@ -629,6 +742,19 @@ def test_flashqla_gdn_raw_forward_probe_source_boundary_tokens():
     assert "local.var" not in src
     assert "float gate_state" in src
     assert "gate_state = 1.000000e+00f;" in src
+
+
+def test_flashqla_gdn_raw_forward_outputs_probe_source_boundary_tokens():
+    src = _lower_source(_make_flashqla_gdn_raw_forward_outputs_probe())
+    _assert_clean_metal_source(src)
+    assert src.count("simdgroup_multiply_accumulate") >= 24
+    assert src.count("simdgroup_load") >= 40
+    assert src.count("simdgroup_store") >= 12
+    assert "threadgroup float" in src
+    assert "local.var" not in src
+    assert "float gate_state" in src
+    assert "gate_state = 1.000000e+00f;" in src
+    assert "a_pre" not in src
 
 
 def _run_native_dtype_probe(tmp_path: Path, dtype_name: str) -> subprocess.CompletedProcess[str]:
@@ -948,6 +1074,21 @@ def test_flashqla_gdn_raw_forward_runtime_mps_matches_torch_reference():
 
     ref_a, ref_w, ref_u = _flashqla_gdn_component_ref(k, v, beta, g_cum)
     assert torch.allclose(a_pre.cpu(), ref_a, atol=1e-4, rtol=1e-5)
+    assert torch.allclose(w.cpu(), ref_w, atol=1e-4, rtol=1e-5)
+    assert torch.allclose(u.cpu(), ref_u, atol=1e-4, rtol=1e-5)
+
+
+@tilelang.testing.requires_metal
+def test_flashqla_gdn_raw_forward_outputs_runtime_mps_matches_torch_reference():
+    kernel = tilelang.compile(_make_flashqla_gdn_raw_forward_outputs_probe(), target="metal -supports_simdgroup=True")
+    k, v, beta, g_cum = _flashqla_gdn_component_synthetic_inputs()
+    w = torch.empty((16, 16), dtype=torch.float32, device="mps")
+    u = torch.empty((16, 16), dtype=torch.float32, device="mps")
+
+    kernel(k.to("mps"), v.to("mps"), beta.to("mps"), g_cum.to("mps"), w, u)
+    torch.mps.synchronize()
+
+    _, ref_w, ref_u = _flashqla_gdn_component_ref(k, v, beta, g_cum)
     assert torch.allclose(w.cpu(), ref_w, atol=1e-4, rtol=1e-5)
     assert torch.allclose(u.cpu(), ref_u, atol=1e-4, rtol=1e-5)
 
